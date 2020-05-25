@@ -7,6 +7,7 @@ from collections.abc import MutableMapping  # @UnusedImport
 
 import itertools
 import six
+import inspect
 
 from ..util import EMAError
 
@@ -16,7 +17,7 @@ from ..util import EMAError
 #
 # .. codeauthor::jhkwakkel <j.h.kwakkel (at) tudelft (dot) nl>
 
-__all__ = ['NamedObject', 'NamedDict', 'Counter', 'representation']
+__all__ = ['NamedObject', 'NamedDict', 'Counter', 'representation', 'filter_map_by_function_args', 'filter_and_call']
 
 
 class NamedObject(object):
@@ -241,3 +242,24 @@ def determine_objects(models, attribute, union=True):
         for key in params_to_remove:
             del named_objects[key]
     return named_objects
+
+
+def filter_map_by_array(dictionary, array, err_on_key_error=True):
+    subset_dict = {}
+    for val in array:
+        try:
+            subset_dict[val] = dictionary[val]
+        except KeyError:
+            if err_on_key_error:
+                raise KeyError
+            else:
+                pass
+    return subset_dict
+
+def filter_map_by_function_args(dictionary, function, err_on_key_error=True ):
+    args = inspect.getfullargspec(function).args
+    return filter_map_by_array(dictionary, args, err_on_key_error)
+
+def filter_and_call(function, dictionary, err_on_key_error=True):
+    return (function(**filter_map_by_function_args(dictionary, function, err_on_key_error)))
+

@@ -11,7 +11,7 @@ import numpy as np
 from scipy.optimize import brentq
 
 from ema_workbench import (SplitModel, RealParameter, ScalarOutcome, Constant,
-                           ema_logging, MultiprocessingEvaluator)
+                           ema_logging, MultiprocessingEvaluator, MultiModel)
 from ema_workbench.em_framework.evaluators import MC
 
 
@@ -49,54 +49,53 @@ def lake_problem_setup(
             }
 
 
-def lake_problem_update(state,
+def lake_problem_update(X,
+                        b,
+                        q,
+                        decisions,
+                        natural_inflows,
+                        iterations,
+                        average_daily_P,
                         iteration
                         ):
-    X= state["X"]
-    b = state["b"]
-    q = state["q"]
-    decisions = state["decisions"]
-    natural_inflows = state["natural_inflows"]
-    nsamples = state["iterations"]
-    average_daily_P = state["average_daily_P"]
+    nsamples = iterations
     t = iteration
     X[t] = (1 - b) * X[t - 1] + X[t - 1]**q / (1 + X[t - 1]**q) + \
                 decisions[t - 1] + natural_inflows[t - 1]
     average_daily_P[t] += X[t] / float(nsamples)
+    return {'X': X, 'average_daily_P': average_daily_P}
 
-
-def lake_problem_variant_setup(state):
-    X= state["X"]
-    stdev=state["stdev"]
-    mean=state["mean"]
-    num_variants = state["num_variants"]
+def lake_problem_variant_setup(X,
+                               stdev,
+                               mean,
+                               num_variants
+                               ):
     X[0] = 0.0
-    state["natural_inflows"] = np.random.lognormal(
+    return {'natural_inflows': np.random.lognormal(
             math.log(mean**2 / math.sqrt(stdev**2 + mean**2)),
             math.sqrt(math.log(1.0 + stdev**2 / mean**2)),
-            size=num_variants)
+            size=num_variants), 'X': X}
 
-def lake_problem_variant_report(state, report):
-    X = state["X"]
-    Pcrit = state["Pcrit"]
-    num_variants = state["num_variants"]
+def lake_problem_variant_report(X,
+                                Pcrit,
+                                num_variants,
+                                iterations,
+                                reliability):
+    reliability += np.sum(X < Pcrit) / float(iterations * num_variants)
+    return{'reliability': reliability}
 
-    iterations = state["iterations"]
-    state["reliability"] += np.sum(X < Pcrit) / float(iterations * num_variants)
-
-def lake_problem_report(state):
-    print(state)
-    average_daily_P=state["average_daily_P"]
-    alpha=state["alpha"]
-    delta=state["delta"]
-    num_variants=state["num_variants"]
-    decisions=state["decisions"]
-    reliability=state["reliability"]
+def lake_problem_report(average_daily_P,
+                        alpha,
+                        delta,
+                        num_variants,
+                        decisions,
+                        reliability
+                        ):
     max_P = np.max(average_daily_P)
     utility = np.sum(alpha * decisions * np.power(delta, np.arange(num_variants)))
     inertia = np.sum(np.absolute(np.diff(decisions)) < 0.02) / float(num_variants - 1)
 
-    return max_P, utility, inertia, reliability
+    return {'max_P': max_P, 'utility': utility, 'inertia': inertia, 'reliability': reliability}
 
 
 if __name__ == '__main__':
@@ -138,6 +137,10 @@ if __name__ == '__main__':
     n_scenarios = 1000
     n_policies = 4
     results=lake_model.run_experiment({})
+    print(results)
+    multi_model = MultiModel("lakeSolo")
+    multi_model.add_model(lake_model)
+    results=multi_model.run_experiment({})
     print(results)
 
 #    with MultiprocessingEvaluator(lake_model) as evaluator:

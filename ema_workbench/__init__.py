@@ -6,7 +6,7 @@ from .em_framework import (Model, RealParameter, CategoricalParameter,
                            Scenario, Policy, MultiprocessingEvaluator,
                            IpyparallelEvaluator, SequentialEvaluator,
                            ReplicatorModel, Constraint, ArrayOutcome,
-                           SplitModel)
+                           SplitModel, MultiModel)
 
 from . import util
 from .util import (save_results, load_results, ema_logging, EMAError,

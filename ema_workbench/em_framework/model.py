@@ -11,7 +11,7 @@ import warnings
 from collections.abc import MutableMapping  # @UnusedImport
 from collections import defaultdict
 
-from .util import (NamedObject, combine, NamedObjectMapDescriptor)
+from .util import (NamedObject, combine, NamedObjectMapDescriptor, filter_and_call, filter_map_by_function_args)
 from .parameters import Parameter, Constant, CategoricalParameter, Experiment
 from .outcomes import AbstractOutcome
 from ..util import EMAError, get_module_logger
@@ -23,7 +23,7 @@ from ..util.ema_logging import method_logger
 #
 
 __all__ = ['AbstractModel', 'Model', 'FileModel', 'Replicator',
-           'SingleReplication', 'ReplicatorModel']
+           'SingleReplication', 'ReplicatorModel', 'SplitModel', 'MultiModel']
 _logger = get_module_logger(__name__)
 
 
@@ -536,6 +536,8 @@ class SplitModel(AbstractModel):
 
     Attributes
     ----------
+
+
     uncertainties : listlike
                     list of parameter
     levers : listlike
@@ -555,6 +557,7 @@ class SplitModel(AbstractModel):
 
     '''
 
+    states = NamedObjectMapDescriptor(Constant)
 
     def __init__(self, name, update=None, setup=None, report=None, variant_setup=None, variant_report=None, num_variants=100, iterations=100):
         super(SplitModel, self).__init__(name)
@@ -590,11 +593,12 @@ class SplitModel(AbstractModel):
         report = None
         state = self.setup(**experiment, num_variants=self.num_variants, iterations = self.iterations)
         for variant in range(self.num_variants):
-            self.variant_setup(state)
+            state.update(filter_and_call(self.variant_setup,state))
             for i in range(self.iterations):
-                self.update(state, iteration=i)
-            self.variant_report(state, report=report)
-        model_output = self.report(state)
+                state['iteration'] = i
+                state.update(filter_and_call(self.update,state))
+            state.update(filter_and_call(self.variant_report, state))
+        model_output = filter_and_call(self.report,state)
         # TODO: might it be possible to somehow abstract this
         # perhaps expose a get_data on modelInterface?
         # different connectors can than implement only this
@@ -613,6 +617,7 @@ class SplitModel(AbstractModel):
 
     def as_dict(self):
         model_specs = super(BaseModel, self).as_dict()
+        model_specs['states'] = join_attr(self.states)
         model_specs['update'] = self.update
         model_specs['setup'] = self.setup
         model_specs['variant_setup'] = self.variant_setup
@@ -622,5 +627,68 @@ class SplitModel(AbstractModel):
         return model_specs
 
 
-class Multimodel(AbstractModel):
-    pass
+class MultiModel(AbstractModel):
+
+    def __init__(self, name, num_variants = 100, iterations=100):
+        super(MultiModel, self).__init__(name)
+        self.models = {}
+        self.num_variants = num_variants
+        self.iterations = iterations
+
+    def add_model(self,model):
+        self.outcomes.extend(model.outcomes)
+        self.constants.extend(model.constants)
+        self.uncertainties.extend(model.uncertainties)
+        self.levers.extend(model.levers)
+        self.models[model.name] = model
+
+
+
+
+    @method_logger(__name__)
+    def run_experiment(self,experiment):
+        """ Method for running an instantiated model structure.
+
+        Parameters
+        ----------
+        experiment : dict like
+
+        """
+        state ={}
+        model_output={}
+        experiment['num_variants']= self.num_variants
+        experiment['iterations']= self.iterations
+        models = self.models.items()
+        for name ,model in models :
+            model_state = filter_and_call(model.setup, experiment, err_on_key_error=False)
+            state.update(model_state)
+        for variant in range(self.num_variants):
+            for name ,model in models :
+                state.update(filter_and_call(model.variant_setup, state))
+
+            for i in range(1,self.iterations):
+                for name ,model in models :
+                    state['iteration'] = i
+                    state.update(filter_and_call(model.update, state))
+            for name ,model in models :
+                state.update(filter_and_call(model.variant_report, state))
+        for name ,model in models :
+            model_report = filter_and_call(model.report, state)
+            model_output.update(model_report)
+        # TODO: might it be possible to somehow abstract this
+        # perhaps expose a get_data on modelInterface?
+        # different connectors can than implement only this
+        # get method
+        results = {}
+        for i, variable in enumerate(self.output_variables):
+            try:
+                value = model_output[variable]
+            except KeyError:
+                _logger.warning(variable + ' not found in model output')
+                value = None
+            except TypeError:
+                value = model_output[i]
+            results[variable] = value
+        return results
+
+
