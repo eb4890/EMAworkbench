@@ -139,6 +139,7 @@ if __name__ == '__main__':
                        variant_report = temp_report,
                        variant_setup = temp_setup)
 
+    temp_model.outcomes = [ScalarOutcome('Pcrit')]
 
     # specify uncertainties
     lake_model.uncertainties = [RealParameter('b', 0.1, 0.45),
@@ -152,7 +153,7 @@ if __name__ == '__main__':
                          range(lake_model.time_horizon)]
 
     # specify outcomes
-    lake_model.outcomes = [ScalarOutcome('max_P',),
+    lake_model.outcomes = [ScalarOutcome('max_P'),
                            ScalarOutcome('utility'),
                            ScalarOutcome('inertia'),
                            ScalarOutcome('reliability')]
