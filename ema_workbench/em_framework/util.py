@@ -246,14 +246,15 @@ def determine_objects(models, attribute, union=True):
 
 def filter_map_by_array(dictionary, array, err_on_key_error=True):
     subset_dict = {}
-    for val in array:
-        try:
-            subset_dict[val] = dictionary[val]
-        except KeyError:
-            if err_on_key_error:
-                raise KeyError
-            else:
-                pass
+    if not array is None:
+        for val in array:
+            try:
+                subset_dict[val] = dictionary[val]
+            except KeyError:
+                if err_on_key_error:
+                    raise KeyError
+                else:
+                    pass
     return subset_dict
 
 def filter_map_by_function_args(dictionary, function, err_on_key_error=True ):
