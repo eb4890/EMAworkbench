@@ -98,6 +98,24 @@ def lake_problem_report(average_daily_P,
     return {'max_P': max_P, 'utility': utility, 'inertia': inertia, 'reliability': reliability}
 
 
+def temp_setup(q=2.0, b=0.42):
+   return ({'Pcrit': brentq(lambda x: x**q / (1 + x**q) - b * x, 0.01, 1.5),
+})
+
+def temp_update(Pcrit):
+    print ("updating P_crit ", Pcrit)
+    return {'Pcrit': Pcrit + np.random.normal(0,0.01)}
+
+def temp_variant_setup():
+   pass
+
+def temp_variant_report():
+   pass
+
+def temp_report(Pcrit):
+   return ({"Pcrit": Pcrit})
+
+
 if __name__ == '__main__':
     ema_logging.log_to_stderr(ema_logging.INFO)
     print ("in main")
@@ -111,6 +129,16 @@ if __name__ == '__main__':
                        variant_report = lake_problem_variant_report,
                        variant_setup = lake_problem_variant_setup)
     lake_model.time_horizon = 100
+
+
+    temp_model = SplitModel('tempproblem',
+                       update=temp_update,
+                       setup=temp_setup,
+                       report=temp_report,
+                       iterations=100,
+                       variant_report = temp_report,
+                       variant_setup = temp_setup)
+
 
     # specify uncertainties
     lake_model.uncertainties = [RealParameter('b', 0.1, 0.45),
@@ -138,8 +166,9 @@ if __name__ == '__main__':
     n_policies = 4
     results=lake_model.run_experiment({})
     print(results)
-    multi_model = MultiModel("lakeSolo")
+    multi_model = MultiModel("lakeMulti")
     multi_model.add_model(lake_model)
+    multi_model.add_model(temp_model)
     results=multi_model.run_experiment({})
     print(results)
 
