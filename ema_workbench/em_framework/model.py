@@ -627,11 +627,18 @@ class SplitModel(AbstractModel):
         return model_specs
 
 
+class Link():
+    def __init__(self, func, src, dest):
+        self.func = func
+        self.src = src
+        self.dest = dest
+
 class MultiModel(AbstractModel):
 
     def __init__(self, name, num_variants = 100, iterations=100):
         super(MultiModel, self).__init__(name)
         self.models = {}
+        self.links = []
         self.num_variants = num_variants
         self.iterations = iterations
 
@@ -642,7 +649,12 @@ class MultiModel(AbstractModel):
         self.levers.extend(model.levers)
         self.models[model.name] = model
 
-
+    def add_link(self, func, src_model_name, dest_model_name):
+        if src_model_name not in self.models:
+            raise ValueError(src_model_name, " not in models" )
+        if dest_model_name not in self.models:
+            raise ValueError(dest_model_name, " not in models" )
+        self.links.append(Link(func, src_model_name, dest_model_name))
 
 
     @method_logger(__name__)
@@ -654,26 +666,27 @@ class MultiModel(AbstractModel):
         experiment : dict like
 
         """
-        state ={}
+        states ={}
         model_output={}
         experiment['num_variants']= self.num_variants
         experiment['iterations']= self.iterations
         models = self.models.items()
         for name ,model in models :
-            model_state = filter_and_call(model.setup, experiment, err_on_key_error=False)
-            state.update(model_state)
+            states[name] = filter_and_call(model.setup, experiment, err_on_key_error=False)
         for variant in range(self.num_variants):
             for name ,model in models :
-                state.update(filter_and_call(model.variant_setup, state))
+                states[name].update(filter_and_call(model.variant_setup, states[name]))
 
             for i in range(1,self.iterations):
                 for name ,model in models :
-                    state['iteration'] = i
-                    state.update(filter_and_call(model.update, state))
+                    states[name]['iteration'] = i
+                    states[name].update(filter_and_call(model.update, states[name]))
+                for link in self.links:
+                    link.func(states[link.src], states[link.dest] )
             for name ,model in models :
-                state.update(filter_and_call(model.variant_report, state))
+                states[name].update(filter_and_call(model.variant_report, states[name]))
         for name ,model in models :
-            model_report = filter_and_call(model.report, state)
+            model_report = filter_and_call(model.report, states[name])
             model_output.update(model_report)
         # TODO: might it be possible to somehow abstract this
         # perhaps expose a get_data on modelInterface?

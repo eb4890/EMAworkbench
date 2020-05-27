@@ -100,6 +100,8 @@ def lake_problem_report(average_daily_P,
 
 def temp_setup(q=2.0, b=0.42):
    return ({'Pcrit': brentq(lambda x: x**q / (1 + x**q) - b * x, 0.01, 1.5),
+            'q': q,
+            'b': b
 })
 
 def temp_update(Pcrit):
@@ -170,6 +172,9 @@ if __name__ == '__main__':
     multi_model = MultiModel("lakeMulti")
     multi_model.add_model(lake_model)
     multi_model.add_model(temp_model)
+    def link_func (temp_model_state, lake_model_state):
+        lake_model_state['Pcrit'] = temp_model_state['Pcrit']
+    multi_model.add_link(link_func, temp_model.name, lake_model.name )
     results=multi_model.run_experiment({})
     print(results)
 
