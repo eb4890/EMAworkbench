@@ -11,7 +11,7 @@ import warnings
 from collections.abc import MutableMapping  # @UnusedImport
 from collections import defaultdict
 
-from .util import (NamedObject, combine, NamedObjectMapDescriptor)
+from .util import (NamedObject, combine, NamedObjectMapDescriptor, filter_and_call, filter_map_by_function_args)
 from .parameters import Parameter, Constant, CategoricalParameter, Experiment
 from .outcomes import AbstractOutcome
 from ..util import EMAError, get_module_logger
@@ -23,7 +23,7 @@ from ..util.ema_logging import method_logger
 #
 
 __all__ = ['AbstractModel', 'Model', 'FileModel', 'Replicator',
-           'SingleReplication', 'ReplicatorModel']
+           'SingleReplication', 'ReplicatorModel', 'SplitModel', 'MultiModel']
 _logger = get_module_logger(__name__)
 
 
@@ -507,3 +507,201 @@ class Model(SingleReplication, BaseModel):
 
 class ReplicatorModel(Replicator, BaseModel):
     pass
+
+
+class SplitModel(AbstractModel):
+    ''' generic class for working with models split up in such
+    way that allows combining models together easily.
+
+    Parameters
+    ----------
+    name : str
+    update : callable
+               a function with each of the state as a
+               keyword argument, it returns an updated list of state and outcomes
+    setup : callable
+            A function which takes the uncertain parameters and returns the initial
+            state
+    report : callable
+             A function run over the final state to create the outcomes
+
+    iterations: int
+                The number of iterations to run the update method
+    variant_setup : callable
+            A function which takes the uncertain parameters and returns the initial
+            state
+    variant_report : callable
+             A function run over the final state to create the outcomes
+
+
+    Attributes
+    ----------
+
+
+    uncertainties : listlike
+                    list of parameter
+    levers : listlike
+             list of parameter instances
+    state: listlike
+            list of states to store
+    outcomes : listlike
+               list of outcome instances
+    name : str
+           alphanumerical name of model structure interface
+    output : dict
+             this should be a dict with the names of the outcomes as key
+    working_directory : str
+                        absolute path, all file operations in the model
+                        structure interface should be resolved from this
+                        directory.
+
+    '''
+
+    states = NamedObjectMapDescriptor(Constant)
+
+    def __init__(self, name, update=None, setup=None, report=None, variant_setup=None, variant_report=None, num_variants=100, iterations=100):
+        super(SplitModel, self).__init__(name)
+
+        if not callable(update):
+            raise ValueError('update function should be callable')
+
+        if not callable(setup):
+            raise ValueError('setup function should be callable')
+
+        if not callable(report):
+            raise ValueError('report function should be callable')
+
+
+        self.update = update
+        self.setup = setup
+        self.report = report
+        self.variant_setup = variant_setup
+        self.variant_report = variant_report
+        self.num_variants = num_variants
+        self.iterations = iterations
+
+
+    @method_logger(__name__)
+    def run_experiment(self, experiment):
+        """ Method for running an instantiated model structure.
+
+        Parameters
+        ----------
+        experiment : dict like
+
+        """
+        report = None
+        state = self.setup(**experiment, num_variants=self.num_variants, iterations = self.iterations)
+        for variant in range(self.num_variants):
+            state.update(filter_and_call(self.variant_setup,state))
+            for i in range(self.iterations):
+                state['iteration'] = i
+                state.update(filter_and_call(self.update,state))
+            state.update(filter_and_call(self.variant_report, state))
+        model_output = filter_and_call(self.report,state)
+        # TODO: might it be possible to somehow abstract this
+        # perhaps expose a get_data on modelInterface?
+        # different connectors can than implement only this
+        # get method
+        results = {}
+        for i, variable in enumerate(self.output_variables):
+            try:
+                value = model_output[variable]
+            except KeyError:
+                _logger.warning(variable + ' not found in model output')
+                value = None
+            except TypeError:
+                value = model_output[i]
+            results[variable] = value
+        return results
+
+    def as_dict(self):
+        model_specs = super(BaseModel, self).as_dict()
+        model_specs['states'] = join_attr(self.states)
+        model_specs['update'] = self.update
+        model_specs['setup'] = self.setup
+        model_specs['variant_setup'] = self.variant_setup
+        model_specs['variant_report'] = self.variant_report
+        model_specs['report'] = self.report
+        model_specs['iterations'] = self.iterations
+        return model_specs
+
+
+class Link():
+    def __init__(self, func, src, dest):
+        self.func = func
+        self.src = src
+        self.dest = dest
+
+class MultiModel(AbstractModel):
+
+    def __init__(self, name, num_variants = 100, iterations=100):
+        super(MultiModel, self).__init__(name)
+        self.models = {}
+        self.links = []
+        self.num_variants = num_variants
+        self.iterations = iterations
+
+    def add_model(self,model):
+        self.outcomes.extend(model.outcomes)
+        self.constants.extend(model.constants)
+        self.uncertainties.extend(model.uncertainties)
+        self.levers.extend(model.levers)
+        self.models[model.name] = model
+
+    def add_link(self, func, src_model_name, dest_model_name):
+        if src_model_name not in self.models:
+            raise ValueError(src_model_name, " not in models" )
+        if dest_model_name not in self.models:
+            raise ValueError(dest_model_name, " not in models" )
+        self.links.append(Link(func, src_model_name, dest_model_name))
+
+
+    @method_logger(__name__)
+    def run_experiment(self,experiment):
+        """ Method for running an instantiated model structure.
+
+        Parameters
+        ----------
+        experiment : dict like
+
+        """
+        states ={}
+        model_output={}
+        experiment['num_variants']= self.num_variants
+        experiment['iterations']= self.iterations
+        models = self.models.items()
+        for name ,model in models :
+            states[name] = filter_and_call(model.setup, experiment, err_on_key_error=False)
+        for variant in range(self.num_variants):
+            for name ,model in models :
+                states[name].update(filter_and_call(model.variant_setup, states[name]))
+
+            for i in range(1,self.iterations):
+                for name ,model in models :
+                    states[name]['iteration'] = i
+                    states[name].update(filter_and_call(model.update, states[name]))
+                for link in self.links:
+                    link.func(states[link.src], states[link.dest] )
+            for name ,model in models :
+                states[name].update(filter_and_call(model.variant_report, states[name]))
+        for name ,model in models :
+            model_report = filter_and_call(model.report, states[name])
+            model_output.update(model_report)
+        # TODO: might it be possible to somehow abstract this
+        # perhaps expose a get_data on modelInterface?
+        # different connectors can than implement only this
+        # get method
+        results = {}
+        for i, variable in enumerate(self.output_variables):
+            try:
+                value = model_output[variable]
+            except KeyError:
+                _logger.warning(variable + ' not found in model output')
+                value = None
+            except TypeError:
+                value = model_output[i]
+            results[variable] = value
+        return results
+
+
